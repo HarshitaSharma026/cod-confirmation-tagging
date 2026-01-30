@@ -1,0 +1,17 @@
+{
+  "name": "virasit-cod",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "express": "^5.2.1",
+    "ngrok": "^5.0.0-beta.2",
+    "node-fetch": "^3.3.2"
+  }
+}
