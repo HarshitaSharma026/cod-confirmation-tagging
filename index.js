@@ -114,32 +114,39 @@ app.post("/msg91/outbound", async (req, res) => {
   }
 });
 
-/* MSG91 WEBHOOK */
+/* MSG91 WEBHOOK -> inbound */
 app.post("/msg91/webhook", async (req, res) => {
   try {
-    console.log("MSG91 Payload:", JSON.stringify(req.body, null, 2));
+    console.log("MSG91 INBOUND Payload:", JSON.stringify(req.body, null, 2));
 
-    const text = (req.body.text || "").trim().toUpperCase();
-    const orderNumber = (req.body.orders || "").replace("#", "").trim();
+    const requestId = req.body.requestId;
+    if (!requestId) {
+      return res.status(200).json({ ignored: "requestId missing" });
+    }
 
-    if (text !== "YES") {
+    let action = "";
+    if (req.body.contentType === "button" && req.body.button) {
+      try {
+        const btn = JSON.parse(req.body.button);
+        action = btn.payload?.toUpperCase();
+      } catch (e) {
+        console.error("Button parse failed");
+      }
+    }
+
+    if (action !== "YES") {
       return res.status(200).json({ ignored: "Not YES" });
     }
 
-    if (!orderNumber) {
-      return res.status(400).json({ error: "Order number missing" });
-    }
-
-    /* 1. Find order by order name */
+    /* Find order via metafield */
     const findOrderQuery = `
       query {
-        orders(first: 1, query: "name:#${orderNumber}") {
+        orders(first: 1, query: "metafield:msg91.request_id=${requestId}") {
           edges {
             node {
               id
               tags
               paymentGatewayNames
-              displayFinancialStatus
             }
           }
         }
@@ -147,12 +154,12 @@ app.post("/msg91/webhook", async (req, res) => {
     `;
 
     const orderRes = await fetch(
-      `https://${SHOP}/admin/api/2026-01/graphql.json`,
+      `https://${process.env.SHOP}/admin/api/${process.env.SHOPIFY_API_VERSION}/graphql.json`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Shopify-Access-Token": SHOPIFY_TOKEN
+          "X-Shopify-Access-Token": process.env.SHOPIFY_TOKEN
         },
         body: JSON.stringify({ query: findOrderQuery })
       }
@@ -160,13 +167,11 @@ app.post("/msg91/webhook", async (req, res) => {
 
     const orderData = await orderRes.json();
     const order = orderData?.data?.orders?.edges?.[0]?.node;
-    // console.log(orderData);
-    // console.log(orderRes);
+
     if (!order) {
-      return res.status(404).json({ error: "Order not found" });
+      return res.status(200).json({ ignored: "Order not found for requestId" });
     }
 
-    /* 2. Ensure COD order */
     const isCOD = order.paymentGatewayNames.some(gw =>
       gw.toLowerCase().includes("cash")
     );
@@ -175,56 +180,48 @@ app.post("/msg91/webhook", async (req, res) => {
       return res.status(200).json({ ignored: "Not COD order" });
     }
 
-    /* 3. Avoid duplicate tag */
-    if (order.tags.includes("COD Confirmed")) {
+    const existingTags = order.tags
+      ? order.tags.split(",").map(t => t.trim())
+      : [];
+
+    if (existingTags.includes("COD Confirmed")) {
       return res.status(200).json({ ignored: "Already confirmed" });
     }
 
-    /* 4. Add COD Confirmed tag */
-    const updatedTags = [...order.tags, "COD Confirmed"];
+    const updatedTags = [...existingTags, "COD Confirmed"];
 
     const updateMutation = `
       mutation {
-        orderUpdate(
-          input: {
-            id: "${order.id}"
-            tags: ${JSON.stringify(updatedTags)}
-          }
-        ) {
-          order {
-            id
-            tags
-          }
-          userErrors {
-            field
-            message
-          }
+        orderUpdate(input: {
+          id: "${order.id}"
+          tags: ${JSON.stringify(updatedTags)}
+        }) {
+          order { id tags }
+          userErrors { message }
         }
       }
     `;
 
-    const updateRes = await fetch(
-      `https://${SHOP}/admin/api/2026-01/graphql.json`,
+    await fetch(
+      `https://${process.env.SHOP}/admin/api/${process.env.SHOPIFY_API_VERSION}/graphql.json`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Shopify-Access-Token": SHOPIFY_TOKEN
+          "X-Shopify-Access-Token": process.env.SHOPIFY_TOKEN
         },
         body: JSON.stringify({ query: updateMutation })
       }
     );
 
-    const updateData = await updateRes.json();
-
-    console.log("COD Confirmed Tag Added:", updateData);
-
     res.status(200).json({ success: true });
+
   } catch (err) {
-    console.error("Error:", err);
-    res.status(500).json({ error: "Server error" });
+    console.error("Inbound error:", err);
+    res.status(200).json({ error: "Handled" });
   }
 });
+
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
