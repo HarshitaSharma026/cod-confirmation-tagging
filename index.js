@@ -73,13 +73,9 @@ app.post("/msg91/outbound", async (req, res) => {
     /* 2. Save requestId to Shopify metafield */
     const metafieldMutation = `
       mutation {
-        metafieldsSet(metafields: [{
-          namespace: "msg91"
-          key: "request_id"
-          type: "single_line_text_field"
-          value: "${requestId}"
-          ownerId: "${order.id}"
-        }]) {
+        metafieldsSet(
+          metafields: [{namespace: "msg91", key: "request_id", type: "single_line_text_field", value: "${requestId}", ownerId: "${order.id}"}]
+        ) {
           metafields {
             id
             key
@@ -106,6 +102,10 @@ app.post("/msg91/outbound", async (req, res) => {
     );
 
     const mfData = await mfRes.json();
+    if (mfData?.data?.metafieldsSet?.userErrors?.length) {
+      console.error("Metafield errors:", mfData.data.metafieldsSet.userErrors);
+    }
+
     console.log("Metafield saved:", mfData);
 
     res.status(200).json({
