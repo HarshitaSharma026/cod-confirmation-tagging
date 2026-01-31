@@ -33,7 +33,12 @@ app.post("/msg91/outbound", async (req, res) => {
     /* 1. Find latest COD order by phone */
     const findOrderQuery = `
       query {
-        orders(first: 1, query: "phone:${phone} payment_gateway:Cash") {
+        orders(
+          first: 1,
+          sortKey: CREATED_AT,
+          reverse: true,
+          query: "payment_gateway:Cash"
+        ) {
           edges {
             node {
               id
@@ -43,6 +48,7 @@ app.post("/msg91/outbound", async (req, res) => {
         }
       }
     `;
+
 
     const orderRes = await fetch(
       `https://${SHOP}/admin/api/2026-01/graphql.json`,
@@ -125,6 +131,7 @@ app.post("/msg91/webhook", async (req, res) => {
     }
 
     let action = "";
+    console.log("body:", req.body);
     if (req.body.contentType === "button" && req.body.button) {
       try {
         const btn = JSON.parse(req.body.button);
@@ -180,9 +187,7 @@ app.post("/msg91/webhook", async (req, res) => {
       return res.status(200).json({ ignored: "Not COD order" });
     }
 
-    const existingTags = order.tags
-      ? order.tags.split(",").map(t => t.trim())
-      : [];
+    const existingTags = Array.isArray(order.tags) ? order.tags : [];
 
     if (existingTags.includes("COD Confirmed")) {
       return res.status(200).json({ ignored: "Already confirmed" });
