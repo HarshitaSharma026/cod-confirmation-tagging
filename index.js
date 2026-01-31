@@ -1,6 +1,6 @@
 const express = require('express');
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
-
+require("dotenv").config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -45,12 +45,12 @@ app.post("/msg91/outbound", async (req, res) => {
     `;
 
     const orderRes = await fetch(
-      `https://${process.env.SHOP}/admin/api/${process.env.SHOPIFY_API_VERSION}/graphql.json`,
+      `https://${SHOP}/admin/api/2026-01/graphql.json`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Shopify-Access-Token": process.env.SHOPIFY_TOKEN
+          "X-Shopify-Access-Token": SHOPIFY_TOKEN
         },
         body: JSON.stringify({ query: findOrderQuery })
       }
@@ -88,12 +88,12 @@ app.post("/msg91/outbound", async (req, res) => {
     `;
 
     const mfRes = await fetch(
-      `https://${process.env.SHOP}/admin/api/${process.env.SHOPIFY_API_VERSION}/graphql.json`,
+      `https://${SHOP}/admin/api/2026-01/graphql.json`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Shopify-Access-Token": process.env.SHOPIFY_TOKEN
+          "X-Shopify-Access-Token": SHOPIFY_TOKEN
         },
         body: JSON.stringify({ query: metafieldMutation })
       }
@@ -154,12 +154,12 @@ app.post("/msg91/webhook", async (req, res) => {
     `;
 
     const orderRes = await fetch(
-      `https://${process.env.SHOP}/admin/api/${process.env.SHOPIFY_API_VERSION}/graphql.json`,
+      `https://${SHOP}/admin/api/2026-01/graphql.json`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Shopify-Access-Token": process.env.SHOPIFY_TOKEN
+          "X-Shopify-Access-Token": SHOPIFY_TOKEN
         },
         body: JSON.stringify({ query: findOrderQuery })
       }
@@ -203,12 +203,12 @@ app.post("/msg91/webhook", async (req, res) => {
     `;
 
     await fetch(
-      `https://${process.env.SHOP}/admin/api/${process.env.SHOPIFY_API_VERSION}/graphql.json`,
+      `https://${SHOP}/admin/api/2026-01/graphql.json`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Shopify-Access-Token": process.env.SHOPIFY_TOKEN
+          "X-Shopify-Access-Token": SHOPIFY_TOKEN
         },
         body: JSON.stringify({ query: updateMutation })
       }
