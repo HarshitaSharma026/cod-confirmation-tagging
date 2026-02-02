@@ -1,57 +1,63 @@
-const express = require('express');
-const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 require("dotenv").config();
+const express = require("express");
+const fetch = (...args) =>
+  import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-app.use(express.urlencoded({extended: false}));
-const SHOP = process.env.SHOP;
-const SHOPIFY_TOKEN = process.env.SHOPIFY_TOKEN;
-
 app.use(express.json());
 
+const PORT = process.env.PORT || 3000;
+const SHOP = process.env.SHOP;
+const SHOPIFY_TOKEN = process.env.SHOPIFY_TOKEN;
+const API_VERSION = "2026-01";
+
+/* =========================
+   Helpers
+   ========================= */
+const buildRequestTag = (requestId) => `MSG91_${requestId}`;
+
 /* Health check */
-app.get("/", (req, res) => {
+app.get("/", (_, res) => {
   res.send("COD Confirmation Server Running");
 });
 
-/* FOR OUTBOUND REQUEST AND REQUESTID TAGGING */
+/* =========================
+   OUTBOUND WEBHOOK (MSG SENT)
+   ========================= */
 app.post("/msg91/outbound", async (req, res) => {
   try {
-    console.log("MSG91 OUTBOUND Payload:", JSON.stringify(req.body, null, 2));
+    console.log("OUTBOUND:", JSON.stringify(req.body, null, 2));
 
-    const requestId = req.body.requestId;
-    const customerNumber = req.body.customerNumber; // 918XXXXXXXXX
-
-    if (!requestId || !customerNumber) {
-      return res.status(200).json({ ignored: "Missing requestId or customerNumber" });
+    const { requestId, content } = req.body;
+    if (!requestId || !content) {
+      return res.status(200).json({ ignored: "Missing requestId or content" });
     }
 
-    // Normalize phone (last 10 digits)
-    const phone = customerNumber.slice(-10);
+    // Extract order number from template content
+    const parsedContent = JSON.parse(content);
+    const orderText = parsedContent?.body_2?.text || ""; // "#V1543"
+    const orderNumber = orderText.replace("#", "").trim();
 
-    /* 1. Find latest COD order by phone */
+    if (!orderNumber) {
+      return res.status(200).json({ ignored: "Order number not found" });
+    }
+
+    /* 1. Find order by order number (name) */
     const findOrderQuery = `
       query {
-        orders(
-          first: 1,
-          sortKey: CREATED_AT,
-          reverse: true,
-          query: "payment_gateway:Cash"
-        ) {
+        orders(first: 1, query: "name:#${orderNumber}") {
           edges {
             node {
               id
-              name
+              tags
             }
           }
         }
       }
     `;
 
-
     const orderRes = await fetch(
-      `https://${SHOP}/admin/api/2026-01/graphql.json`,
+      `https://${SHOP}/admin/api/${API_VERSION}/graphql.json`,
       {
         method: "POST",
         headers: {
@@ -66,21 +72,23 @@ app.post("/msg91/outbound", async (req, res) => {
     const order = orderData?.data?.orders?.edges?.[0]?.node;
 
     if (!order) {
-      console.warn("No COD order found for phone:", phone);
       return res.status(200).json({ ignored: "Order not found" });
     }
 
-    /* 2. Save requestId to Shopify metafield */
-    const metafieldMutation = `
+    const requestTag = buildRequestTag(requestId);
+
+    // Avoid duplicate tagging
+    if (order.tags.includes(requestTag)) {
+      return res.status(200).json({ ignored: "Request tag already exists" });
+    }
+
+    /* 2. Add requestId as tag */
+    const addTagMutation = `
       mutation {
-        metafieldsSet(
-          metafields: [{namespace: "msg91", key: "request_id", type: "single_line_text_field", value: "${requestId}", ownerId: "${order.id}"}]
+        tagsAdd(
+          id: "${order.id}"
+          tags: ["${requestTag}"]
         ) {
-          metafields {
-            id
-            key
-            value
-          }
           userErrors {
             field
             message
@@ -89,66 +97,61 @@ app.post("/msg91/outbound", async (req, res) => {
       }
     `;
 
-    const mfRes = await fetch(
-      `https://${SHOP}/admin/api/2026-01/graphql.json`,
+    const updateRes = await fetch(
+      `https://${SHOP}/admin/api/${API_VERSION}/graphql.json`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "X-Shopify-Access-Token": SHOPIFY_TOKEN
         },
-        body: JSON.stringify({ query: metafieldMutation })
+        body: JSON.stringify({ query: addTagMutation })
       }
     );
 
-    const mfData = await mfRes.json();
-    if (mfData?.data?.metafieldsSet?.userErrors?.length) {
-      console.error("Metafield errors:", mfData.data.metafieldsSet.userErrors);
+    const updateData = await updateRes.json();
+    console.log("OUTBOUND TAG RESPONSE:", updateData);
+
+    if (updateData?.data?.tagsAdd?.userErrors?.length) {
+      return res.status(500).json({ error: "Failed to add requestId tag" });
     }
 
-    console.log("Metafield saved:", mfData);
-
-    res.status(200).json({
-      success: true,
-      order: order.name,
-      requestId
-    });
+    res.status(200).json({ success: true });
 
   } catch (err) {
-    console.error("Outbound webhook error:", err);
+    console.error("Outbound error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
 
-/* MSG91 WEBHOOK -> inbound */
+/* =========================
+   INBOUND WEBHOOK (YES CLICK)
+   ========================= */
 app.post("/msg91/webhook", async (req, res) => {
   try {
-    console.log("MSG91 INBOUND Payload:", JSON.stringify(req.body, null, 2));
+    console.log("INBOUND:", JSON.stringify(req.body, null, 2));
 
-    const requestId = req.body.requestId;
+    const { requestId } = req.body;
     if (!requestId) {
       return res.status(200).json({ ignored: "requestId missing" });
     }
 
     let action = "";
-    console.log("body:", req.body);
     if (req.body.contentType === "button" && req.body.button) {
-      try {
-        const btn = JSON.parse(req.body.button);
-        action = btn.payload?.toUpperCase();
-      } catch (e) {
-        console.error("Button parse failed");
-      }
+      const btn = JSON.parse(req.body.button);
+      action = btn.payload?.toUpperCase();
     }
 
     if (action !== "YES") {
       return res.status(200).json({ ignored: "Not YES" });
     }
 
-    /* Find order via metafield */
+    const requestTag = buildRequestTag(requestId);
+
+    /* 1. Find order by requestId tag */
     const findOrderQuery = `
       query {
-        orders(first: 1, query: "metafield:msg91.request_id=${requestId}") {
+        orders(first: 1, query: "tag:${requestTag}") {
           edges {
             node {
               id
@@ -161,7 +164,7 @@ app.post("/msg91/webhook", async (req, res) => {
     `;
 
     const orderRes = await fetch(
-      `https://${SHOP}/admin/api/2026-01/graphql.json`,
+      `https://${SHOP}/admin/api/${API_VERSION}/graphql.json`,
       {
         method: "POST",
         headers: {
@@ -179,36 +182,39 @@ app.post("/msg91/webhook", async (req, res) => {
       return res.status(200).json({ ignored: "Order not found for requestId" });
     }
 
+    /* 2. Ensure COD */
     const isCOD = order.paymentGatewayNames.some(gw =>
       gw.toLowerCase().includes("cash")
     );
-
     if (!isCOD) {
       return res.status(200).json({ ignored: "Not COD order" });
     }
 
-    const existingTags = Array.isArray(order.tags) ? order.tags : [];
-
-    if (existingTags.includes("COD Confirmed")) {
+    if (order.tags.includes("COD Confirmed")) {
       return res.status(200).json({ ignored: "Already confirmed" });
     }
 
-    const updatedTags = [...existingTags, "COD Confirmed"];
+    /* 3. Add COD Confirmed (using your known-working logic) */
+    const updatedTags = [...order.tags, "COD Confirmed"];
 
     const updateMutation = `
       mutation {
-        orderUpdate(input: {
-          id: "${order.id}"
-          tags: ${JSON.stringify(updatedTags)}
-        }) {
-          order { id tags }
-          userErrors { message }
+        orderUpdate(
+          input: {
+            id: "${order.id}"
+            tags: ${JSON.stringify(updatedTags)}
+          }
+        ) {
+          userErrors {
+            field
+            message
+          }
         }
       }
     `;
 
-    await fetch(
-      `https://${SHOP}/admin/api/2026-01/graphql.json`,
+    const updateRes = await fetch(
+      `https://${SHOP}/admin/api/${API_VERSION}/graphql.json`,
       {
         method: "POST",
         headers: {
@@ -219,14 +225,16 @@ app.post("/msg91/webhook", async (req, res) => {
       }
     );
 
+    const updateData = await updateRes.json();
+    console.log("COD CONFIRM RESPONSE:", updateData);
+
     res.status(200).json({ success: true });
 
   } catch (err) {
     console.error("Inbound error:", err);
-    res.status(200).json({ error: "Handled" });
+    res.status(500).json({ error: "Server error" });
   }
 });
-
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
