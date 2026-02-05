@@ -53,16 +53,19 @@ app.post("/msg91/outbound", async (req, res) => {
 
     // body_2.text = "#V1592"
     const orderText = parsedContent?.body_2?.text || "";
+    console.log("RAW body_2.text:", parsedContent?.body_2?.text);
+    console.log("orderText variable:", orderText);
+
 
     // Extract numeric order number -> "1592"
     const orderNumber = orderText.replace(/[^0-9]/g, "");
 
-    if (!orderNumber) {
+    if (!orderText) {
       return res.status(200).json({ ignored: "Order number not found in template" });
     }
 
-    const shopifyOrderName = `#${orderNumber}`;
-    console.log("MATCHING ORDER NAME:", shopifyOrderName);
+    // const shopifyOrderName = `#${orderNumber}`;
+    console.log("MATCHING ORDER NAME:", orderText);
 
     /* -------------------------------
        2. Find order in Shopify
@@ -70,11 +73,11 @@ app.post("/msg91/outbound", async (req, res) => {
     let order = null;
 
 for (let attempt = 1; attempt <= 6; attempt++) {
-  console.log(`ORDER SEARCH ATTEMPT ${attempt} for ${shopifyOrderName}`);
+  console.log(`ORDER SEARCH ATTEMPT ${attempt} for ${orderText}`);
 
   const findOrderQuery = `
     query {
-      orders(first: 1, query: "name:${shopifyOrderName}") {
+      orders(first: 1, query: "name:${orderText}") {
         edges {
           node {
             id
@@ -110,7 +113,7 @@ for (let attempt = 1; attempt <= 6; attempt++) {
   if (!order) {
     return res.status(200).json({
       ignored: "Order not found after retries",
-      orderNameTried: shopifyOrderName
+      orderNameTried: orderText
     });
   }
 
