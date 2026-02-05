@@ -11,44 +11,69 @@ const SHOP = process.env.SHOP;
 const SHOPIFY_TOKEN = process.env.SHOPIFY_TOKEN;
 const API_VERSION = "2026-01";
 
-/* =========================
-   Helpers
-   ========================= */
-const buildRequestTag = (requestId) => `MSG91_${requestId}`;
+/* ================= HELPERS ================= */
 
-/* Health check */
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const buildRequestTag = requestId => `MSG91_${requestId}`;
+
+/* ================= HEALTH ================= */
+
 app.get("/", (_, res) => {
   res.send("COD Confirmation Server Running");
 });
 
-/* =========================
-   OUTBOUND WEBHOOK (MSG SENT)
-   ========================= */
+
+/* ================= OUTBOUND WEBHOOK ================= */
+
 app.post("/msg91/outbound", async (req, res) => {
   try {
-    console.log("OUTBOUND:", JSON.stringify(req.body, null, 2));
+    console.log("OUTBOUND PAYLOAD:", JSON.stringify(req.body, null, 2));
 
-    const { requestId, content } = req.body;
+    const { requestId, content, eventName } = req.body;
+
+    // Only act on delivered events
+    if (eventName !== "delivered") {
+      return res.status(200).json({ ignored: "Not a delivered event" });
+    }
+
     if (!requestId || !content) {
       return res.status(200).json({ ignored: "Missing requestId or content" });
     }
 
-    // Extract order number from template content
-    const parsedContent = JSON.parse(content);
-    const orderText = parsedContent?.body_2?.text || ""; // "#V1543"
-    const orderNumber = orderText.replace("#", "").trim();
-
-    if (!orderNumber) {
-      return res.status(200).json({ ignored: "Order number not found" });
+    /* -------------------------------
+       1. Parse template content
+    -------------------------------- */
+    let parsedContent;
+    try {
+      parsedContent = JSON.parse(content);
+    } catch (e) {
+      console.error("CONTENT PARSE FAILED");
+      return res.status(200).json({ ignored: "Invalid content JSON" });
     }
 
-    /* 1. Find order by order number (name) */
+    // body_2.text = "#V1592"
+    const orderText = parsedContent?.body_2?.text || "";
+
+    // Extract numeric order number -> "1592"
+    const orderNumber = orderText.replace(/[^0-9]/g, "");
+
+    if (!orderNumber) {
+      return res.status(200).json({ ignored: "Order number not found in template" });
+    }
+
+    const shopifyOrderName = `#${orderNumber}`;
+    console.log("MATCHING ORDER NAME:", shopifyOrderName);
+
+    /* -------------------------------
+       2. Find order in Shopify
+    -------------------------------- */
     const findOrderQuery = `
       query {
-        orders(first: 1, query: "name:#${orderNumber}") {
+        orders(first: 1, query: "name:${shopifyOrderName}") {
           edges {
             node {
               id
+              name
               tags
             }
           }
@@ -69,20 +94,34 @@ app.post("/msg91/outbound", async (req, res) => {
     );
 
     const orderData = await orderRes.json();
+
+    console.log(
+      "ORDER SEARCH RESULT:",
+      JSON.stringify(orderData?.data?.orders?.edges, null, 2)
+    );
+
     const order = orderData?.data?.orders?.edges?.[0]?.node;
 
     if (!order) {
-      return res.status(200).json({ ignored: "Order not found" });
+      return res.status(200).json({
+        ignored: "Order not found in Shopify",
+        orderNameTried: shopifyOrderName
+      });
     }
 
-    const requestTag = buildRequestTag(requestId);
+    /* -------------------------------
+       3. Build requestId tag
+    -------------------------------- */
+    const requestTag = `MSG91_${requestId}`;
 
-    // Avoid duplicate tagging
+    // Idempotency check
     if (order.tags.includes(requestTag)) {
-      return res.status(200).json({ ignored: "Request tag already exists" });
+      return res.status(200).json({ ignored: "RequestId tag already exists" });
     }
 
-    /* 2. Add requestId as tag */
+    /* -------------------------------
+       4. Add tag to order
+    -------------------------------- */
     const addTagMutation = `
       mutation {
         tagsAdd(
@@ -110,46 +149,54 @@ app.post("/msg91/outbound", async (req, res) => {
     );
 
     const updateData = await updateRes.json();
-    console.log("OUTBOUND TAG RESPONSE:", updateData);
 
-    if (updateData?.data?.tagsAdd?.userErrors?.length) {
+    console.log("TAG ADD RESPONSE:", JSON.stringify(updateData, null, 2));
+
+    if (updateData.errors || updateData?.data?.tagsAdd?.userErrors?.length) {
+      console.error("TAGGING FAILED");
       return res.status(500).json({ error: "Failed to add requestId tag" });
     }
 
-    res.status(200).json({ success: true });
+    /* -------------------------------
+       5. Success
+    -------------------------------- */
+    res.status(200).json({
+      success: true,
+      orderName: order.name,
+      tagAdded: requestTag
+    });
 
   } catch (err) {
-    console.error("Outbound error:", err);
+    console.error("OUTBOUND HANDLER ERROR:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
 
-/* =========================
-   INBOUND WEBHOOK (YES CLICK)
-   ========================= */
+
+/* ================= INBOUND WEBHOOK ================= */
+
 app.post("/msg91/webhook", async (req, res) => {
   try {
     console.log("INBOUND:", JSON.stringify(req.body, null, 2));
 
+    if (
+      req.body.contentType !== "button" ||
+      !req.body.button ||
+      req.body.templateName !== "cod_order_confirmation_test"
+    ) {
+      return res.status(200).json({ ignored: "Not COD confirmation" });
+    }
+
     const { requestId } = req.body;
-    if (!requestId) {
-      return res.status(200).json({ ignored: "requestId missing" });
-    }
+    const btn = JSON.parse(req.body.button);
 
-    let action = "";
-    if (req.body.contentType === "button" && req.body.button) {
-      const btn = JSON.parse(req.body.button);
-      action = btn.payload?.toUpperCase();
-    }
-
-    if (action !== "YES") {
+    if (btn.payload !== "YES") {
       return res.status(200).json({ ignored: "Not YES" });
     }
 
     const requestTag = buildRequestTag(requestId);
 
-    /* 1. Find order by requestId tag */
-    const findOrderQuery = `
+    const query = `
       query {
         orders(first: 1, query: "tag:${requestTag}") {
           edges {
@@ -171,7 +218,7 @@ app.post("/msg91/webhook", async (req, res) => {
           "Content-Type": "application/json",
           "X-Shopify-Access-Token": SHOPIFY_TOKEN
         },
-        body: JSON.stringify({ query: findOrderQuery })
+        body: JSON.stringify({ query })
       }
     );
 
@@ -179,41 +226,25 @@ app.post("/msg91/webhook", async (req, res) => {
     const order = orderData?.data?.orders?.edges?.[0]?.node;
 
     if (!order) {
-      return res.status(200).json({ ignored: "Order not found for requestId" });
+      return res.status(200).json({ ignored: "Order not found" });
     }
 
-    /* 2. Ensure COD */
-    const isCOD = order.paymentGatewayNames.some(gw =>
-      gw.toLowerCase().includes("cash")
-    );
-    if (!isCOD) {
-      return res.status(200).json({ ignored: "Not COD order" });
-    }
-
-    if (order.tags.includes("COD Confirmed")) {
+    if (order.tags.includes("cod_confirmed")) {
       return res.status(200).json({ ignored: "Already confirmed" });
     }
 
-    /* 3. Add COD Confirmed (using your known-working logic) */
-    const updatedTags = [...order.tags, "COD Confirmed"];
-
-    const updateMutation = `
+    const mutation = `
       mutation {
-        orderUpdate(
-          input: {
-            id: "${order.id}"
-            tags: ${JSON.stringify(updatedTags)}
-          }
+        tagsAdd(
+          id: "${order.id}"
+          tags: ["cod_confirmed"]
         ) {
-          userErrors {
-            field
-            message
-          }
+          userErrors { message }
         }
       }
     `;
 
-    const updateRes = await fetch(
+    await fetch(
       `https://${SHOP}/admin/api/${API_VERSION}/graphql.json`,
       {
         method: "POST",
@@ -221,12 +252,9 @@ app.post("/msg91/webhook", async (req, res) => {
           "Content-Type": "application/json",
           "X-Shopify-Access-Token": SHOPIFY_TOKEN
         },
-        body: JSON.stringify({ query: updateMutation })
+        body: JSON.stringify({ query: mutation })
       }
     );
-
-    const updateData = await updateRes.json();
-    console.log("COD CONFIRM RESPONSE:", updateData);
 
     res.status(200).json({ success: true });
 
@@ -235,6 +263,8 @@ app.post("/msg91/webhook", async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 });
+
+/* ================= START ================= */
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
