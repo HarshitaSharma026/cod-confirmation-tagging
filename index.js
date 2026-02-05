@@ -67,47 +67,53 @@ app.post("/msg91/outbound", async (req, res) => {
     /* -------------------------------
        2. Find order in Shopify
     -------------------------------- */
-    const findOrderQuery = `
-      query {
-        orders(first: 1, query: "name:${shopifyOrderName}") {
-          edges {
-            node {
-              id
-              name
-              tags
-            }
+    let order = null;
+
+for (let attempt = 1; attempt <= 6; attempt++) {
+  console.log(`ORDER SEARCH ATTEMPT ${attempt} for ${shopifyOrderName}`);
+
+  const findOrderQuery = `
+    query {
+      orders(first: 1, query: "name:${shopifyOrderName}") {
+        edges {
+          node {
+            id
+            name
+            tags
           }
         }
       }
-    `;
-
-    const orderRes = await fetch(
-      `https://${SHOP}/admin/api/${API_VERSION}/graphql.json`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Shopify-Access-Token": SHOPIFY_TOKEN
-        },
-        body: JSON.stringify({ query: findOrderQuery })
-      }
-    );
-
-    const orderData = await orderRes.json();
-
-    console.log(
-      "ORDER SEARCH RESULT:",
-      JSON.stringify(orderData?.data?.orders?.edges, null, 2)
-    );
-
-    const order = orderData?.data?.orders?.edges?.[0]?.node;
-
-    if (!order) {
-      return res.status(200).json({
-        ignored: "Order not found in Shopify",
-        orderNameTried: shopifyOrderName
-      });
     }
+  `;
+
+  const orderRes = await fetch(
+    `https://${SHOP}/admin/api/${API_VERSION}/graphql.json`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Shopify-Access-Token": SHOPIFY_TOKEN
+      },
+      body: JSON.stringify({ query: findOrderQuery })
+    }
+  );
+
+  const orderData = await orderRes.json();
+    order = orderData?.data?.orders?.edges?.[0]?.node;
+
+    if (order) break;
+
+    // wait before retrying
+    await sleep(5000); // 5 seconds
+}
+
+  if (!order) {
+    return res.status(200).json({
+      ignored: "Order not found after retries",
+      orderNameTried: shopifyOrderName
+    });
+  }
+
 
     /* -------------------------------
        3. Build requestId tag
