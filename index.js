@@ -27,10 +27,13 @@ app.get("/", (_, res) => {
 
 app.post("/msg91/outbound", async (req, res) => {
   try {
-    console.log("OUTBOUND PAYLOAD:", JSON.stringify(req.body, null, 2));
+    
+    console.log("🔥 OUTBOUND HIT 🔥");
+
 
     // const { requestId, content, eventName } = req.body;
     const { requestId, content, eventName, templateName } = req.body;
+    
 
     if (eventName !== "delivered") {
       return res.status(200).json({ ignored: "Not a delivered event" });
@@ -39,7 +42,7 @@ app.post("/msg91/outbound", async (req, res) => {
     if (templateName !== "cod_order_confirmation_test") {
       return res.status(200).json({ ignored: "Not COD template" });
     }
-
+    console.log("OUTBOUND PAYLOAD:", JSON.stringify(req.body, null, 2));
     if (!requestId || !content) {
       return res.status(200).json({ ignored: "Missing requestId or content" });
     }
@@ -81,7 +84,7 @@ for (let attempt = 1; attempt <= 6; attempt++) {
 
   const findOrderQuery = `
     query {
-      orders(first: 1, query: "name:${orderText}") {
+      orders(first: 1, query: "name:${orderNumber}") {
         edges {
           node {
             id
