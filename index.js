@@ -193,7 +193,7 @@ for (let attempt = 1; attempt <= 6; attempt++) {
 
 app.post("/msg91/webhook", async (req, res) => {
   try {
-    console.log("INBOUND:", JSON.stringify(req.body, null, 2));
+    
 
     if (
       req.body.contentType !== "button" ||
@@ -203,6 +203,7 @@ app.post("/msg91/webhook", async (req, res) => {
       return res.status(200).json({ ignored: "Not COD confirmation" });
     }
 
+    console.log("INBOUND:", JSON.stringify(req.body, null, 2));
     const { requestId } = req.body;
     const btn = JSON.parse(req.body.button);
 
