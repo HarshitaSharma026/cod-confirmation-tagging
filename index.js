@@ -29,11 +29,15 @@ app.post("/msg91/outbound", async (req, res) => {
   try {
     console.log("OUTBOUND PAYLOAD:", JSON.stringify(req.body, null, 2));
 
-    const { requestId, content, eventName } = req.body;
+    // const { requestId, content, eventName } = req.body;
+    const { requestId, content, eventName, templateName } = req.body;
 
-    // Only act on delivered events
     if (eventName !== "delivered") {
       return res.status(200).json({ ignored: "Not a delivered event" });
+    }
+
+    if (templateName !== "cod_order_confirmation_test") {
+      return res.status(200).json({ ignored: "Not COD template" });
     }
 
     if (!requestId || !content) {
