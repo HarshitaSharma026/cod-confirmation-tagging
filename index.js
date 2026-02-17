@@ -80,7 +80,7 @@ app.post("/msg91/outbound", async (req, res) => {
     let order = null;
 
 for (let attempt = 1; attempt <= 6; attempt++) {
-  console.log(`ORDER SEARCH ATTEMPT ${attempt} for ${orderText}`);
+  console.log(`ORDER SEARCH ATTEMPT ${attempt} for ${orderNumber}`);
 
   const findOrderQuery = `
     query {
